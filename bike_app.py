@@ -1,29 +1,33 @@
 import streamlit as st
 
+import constants
 import ingest
 import plotting
 
-METRIC_DICT = {"Percentage of overweight Year 6 children": 20602,
-               "Percentage of overweight Reception children": 20601}
-
 
 def get_obesity_metrics(comb_df):
-    for metric_label, metric_code in METRIC_DICT.items():
+    for metric_label, metric_code in constants.METRIC_DICT.items():
         df_latest, _ = ingest.get_london_df_metric(metric_code)
-        df_latest = df_latest[["Area Code", ingest.VALUE]].rename(columns={ingest.VALUE: metric_label, "Area Code": ingest.LA_CODE})
-        comb_df = comb_df.merge(df_latest, how="left", on=ingest.LA_CODE)
+        df_latest = df_latest[df_latest[ingest.VALUE].notna()]
+        df_latest = df_latest[["Area Code", ingest.VALUE]].rename(
+            columns={ingest.VALUE: metric_label, "Area Code": constants.LA_CODE}
+        )
+        comb_df = comb_df.merge(df_latest, how="left", on=constants.LA_CODE)
     return comb_df
 
 
 def bike_or_metric_colour():
-    val_choice = st.selectbox("Colour set by bike points or metric:", ["Bike Points", "Metric"], key="colour")
+    val_choice = st.selectbox(
+        "Colour set by bike points or metric:", ["Bike Points", "Metric"], key="colour"
+    )
     return val_choice
 
 
 def comparator_selector():
-    values = [plotting.DEP_DECILE] + [key for key in METRIC_DICT.keys()]
+    values = [constants.DEP_DECILE] + [key for key in constants.METRIC_DICT.keys()]
     val_choice = st.selectbox("Health/deprivation metric", values, key="metric")
     return val_choice
+
 
 st.title("London Bike Hire")
 
@@ -49,6 +53,14 @@ else:
     colour_col = metric
     other_col = "Bike Points"
 
-
-fig = plotting.get_plotly_map(london_map, comb_df, colour_col=colour_col, other_col=other_col)
+fig = plotting.get_plotly_map(
+    london_map, comb_df, colour_col=colour_col, other_col=other_col
+)
 st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("<p style='font-size:20px'>The map can be toggled with the dropdowns to change metric and whether"
+            "colour is given by the number of bike points or the metric.<br>"
+            "The deprivation index is the mean of the deciles of all the wards in the borough. A lower deprivation "
+            "index means more deprived (decile 1 is the most deprived 10%).<br>"
+            "City of London does not have obesity data, so will show as blank on the map in this case.</p>",
+            unsafe_allow_html=True)

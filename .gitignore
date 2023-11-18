@@ -160,6 +160,6 @@ cython_debug/
 #.idea/
 
 create/*
-data/*
-!data/.gitkeep.txt
+output/*
+!output/.gitkeep.txt
 
