@@ -1,17 +1,29 @@
 import requests
 
-import fiona
 import geopandas as gpd
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
 import pandas as pd
-from pyproj import Transformer, Proj
 from shapely.geometry import Point
 
-URL = "https://api.tfl.gov.uk/BikePoint"
+URL_BIKE = "https://api.tfl.gov.uk/BikePoint"
 DEP_CODE = "Local Authority District code (2019)"
 DEP_DECILE = "Index of Multiple Deprivation (IMD) Decile"
 LA_CODE = "LAD23CD"
+
+API_START = "https://fingertips.phe.org.uk/api/all_data/csv/for_one_indicator?indicator_id="
+
+AREA_CODE = "Area Code"
+TIME_PERIOD = "Time period"
+START_YEAR = "Start Year"
+AREA_NAME = "Area Name"
+VALUE = "Value"
+MEDIAN = "Median"
+MIN = "Min"
+MAX = "Max"
+
+DPI = 300
+
+METRIC_DICT = {"Proportion of overweight Year 6 children": 20602,
+               "Proportion of overweight Reception children": 20601}
 
 
 def get_deprivation_index():
@@ -21,90 +33,57 @@ def get_deprivation_index():
     return df_dep_london_agg.reset_index(drop=False).rename(columns={DEP_CODE: LA_CODE})
 
 
-def london_choropleth(df, column, column_name):
-    fig, ax = plt.subplots()
-    df.plot(ax=ax, linewidth=50, column=column, legend=True, legend_kwds={"label": column_name}, cmap="viridis")
-    ax.axis("off")
-    fig.savefig(f"output/{column_name}.png", dpi=300, bbox_inches="tight")
-    return None
+def get_bike_points():
+    resp = requests.get(url=URL_BIKE)
+    if resp.status_code != 200:
+        raise requests.exceptions.RequestException()
+    data = resp.json()
+    df = pd.DataFrame(data)
+    geometry = [Point(xy) for xy in zip(df["lon"], df["lat"])]
+    geo_df = gpd.GeoDataFrame(geometry=geometry)
+    return geo_df
 
 
-df_dep = get_deprivation_index()
+def get_london_map():
+    london_plus_map = gpd.read_file("data/Local_Authority_Districts_May_2023_UK_BGC_V2_-6664827264414594220.geojson")
+    london_map = london_plus_map[london_plus_map["LAD23CD"].str[:3] == "E09"]
+    london_map.to_file("data/london.geojson", driver="GeoJSON")
+    london_map = london_map.reset_index()
+    london_map = london_map.to_crs("EPSG:4326")
+    return london_map
 
 
-resp = requests.get(url=URL)
-if resp.status_code != 200:
-    raise requests.exceptions.RequestException()
-data = resp.json()
+def get_points_borough(geo_df, london_map):
+    combined_geodf = gpd.sjoin(geo_df, london_map, how="inner", predicate="within")
+    points_borough = combined_geodf[["LAD23CD", "LAD23NM", "geometry"]].groupby(["LAD23CD", "LAD23NM"]).count().reset_index().rename(columns={"geometry": "Bike Points"}) # Only 12 boroughs have bike points
+    points_borough["percentage_Bike Points"] = points_borough["Bike Points"] / points_borough["Bike Points"].sum()
+    num_boroughs = len(london_map["LAD23NM"].drop_duplicates()) # 33 boroughs
 
-df = pd.DataFrame(data)
-
-# Cut down to London and save as geojson
-london_plus_map = gpd.read_file("data/Local_Authority_Districts_May_2023_UK_BGC_V2_-6664827264414594220.geojson")
-london_map = london_plus_map[london_plus_map["LAD23CD"].str[:3] == "E09"]
-london_map.to_file("data/london.geojson", driver="GeoJSON")
+    points_borough = points_borough.sort_values(by="Bike Points", ascending=False).reset_index(drop=True)
+    points_borough["cumulative_points"] = points_borough["Bike Points"].cumsum()
+    points_borough["cumulative_perc"] = points_borough["cumulative_points"] / points_borough["Bike Points"].sum()
+    return points_borough
 
 
-#london_map = gpd.read_file("data/MSOA_2011_London_gen_MHW.shp") # https://data.london.gov.uk/dataset/statistical-gis-boundary-files-london -- needs shx file too
-#london_map = gpd.read_file("data/MSOA_2011_EW_BSC_V3.shp")
-# london_geo = london_map.to_crs(epsg=4326)
-fig, ax = plt.subplots()
-london_map = london_map.reset_index()
-london_map = london_map.to_crs("EPSG:4326")
-london_map.plot(ax=ax, linewidth=50)
-geometry = [Point(xy) for xy in zip(df["lon"], df["lat"])]
-geo_df = gpd.GeoDataFrame(geometry = geometry)
-g = geo_df.plot(ax = ax, markersize=4, color='red', marker="o", linewidths=0, alpha=0.4)
-ax.axis("off")
-fig.savefig("output/bikepoint_locations.png", dpi=300, bbox_inches="tight")
+def combine_dfs(london_map, df_dep, points_borough):
+    dep_london_map = london_map.merge(df_dep, how="left", on=LA_CODE)
+    comb_df = dep_london_map.merge(points_borough.drop(columns=["LAD23NM"]), how="left", on=LA_CODE).fillna(0)
+    return comb_df
 
-dep_london_map = london_map.merge(df_dep, how="left", on=LA_CODE)
-# fig_dep, ax_dep = plt.subplots()
-# dep_london_map.plot(ax=ax_dep, linewidth=50, column=DEP_DECILE, legend=True,
-#                     legend_kwds={"label": "Mean deprivation decile"}, cmap="viridis")
-# ax_dep.axis("off")
-# fig_dep.savefig("output/deprivation_map.png", dpi=300, bbox_inches="tight")
-london_choropleth(dep_london_map, DEP_DECILE, "Mean deprivation decile")
 
-combined_geodf = gpd.sjoin(geo_df, london_map, how="inner", predicate="within")
-points_borough = combined_geodf[["LAD23CD", "LAD23NM", "geometry"]].groupby(["LAD23CD", "LAD23NM"]).count().reset_index().rename(columns={"geometry": "Bike Points"}) # Only 12 boroughs have bike points
-points_borough["percentage_Bike Points"] = points_borough["Bike Points"] / points_borough["Bike Points"].sum()
-num_boroughs = len(london_map["LAD23NM"].drop_duplicates()) # 33 boroughs
+def get_london_df_metric(metric_code):
+    df = pd.read_csv(f"{API_START}{metric_code}")
+    df_london_las = df[df[AREA_CODE].str[:3] == "E09"]  # 'E09' is the start of codes for London local authorities
+    latest_year = df_london_las[TIME_PERIOD].max()
+    df_las_latest = df_london_las[df_london_las[TIME_PERIOD] == latest_year]
 
-points_borough = points_borough.sort_values(by="Bike Points", ascending=False).reset_index(drop=True)
+    df_london_las[START_YEAR] = pd.to_numeric(df_london_las[TIME_PERIOD].str[:4], errors="coerce")
+    df_las_piv = df_london_las[[AREA_NAME, VALUE, START_YEAR]].pivot(index=START_YEAR, columns=AREA_NAME, values=VALUE)
 
-comb_df = london_map.merge(points_borough, on="LAD23NM", how="left")
-geojson = london_map.__geo_interface__
+    df_las_piv = df_las_piv[df_las_piv.index != 2020]  # Very few responses for Covid year and way higher than normal
+    df_las_piv[MEDIAN] = df_las_piv.median(axis=1)
+    df_las_piv[MAX] = df_las_piv.max(axis=1)
+    df_las_piv[MIN] = df_las_piv.min(axis=1)
 
-fig = go.Figure(go.Choroplethmapbox(geojson=geojson, locations=comb_df.index, z=comb_df["Bike Points"].fillna(0),
-                                    colorscale="Viridis", zmin=0, zmax=comb_df["Bike Points"].max(),
-                                    marker_opacity=0.5, marker_line_width=0, text=comb_df["LAD23NM"],
-                                    hovertemplate="<b>%{text}</b><br>" + "%{z:,.0f}<br><extra></extra>"))
-fig.update_layout(width=750, height=750, mapbox_style="white-bg",
-                  mapbox_zoom=8.5, mapbox_center = {"lat": 51.5, "lon": -0.1})
-#fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+    return df_las_latest, df_las_piv
 
-def get_bike_points_bar(df):
-    fig, ax = plt.subplots()
-    ax.grid(axis="x", linestyle="--", color="grey", alpha=0.5)
-    ax.barh(df.index, df["Bike Points"])
-    ax.set_yticks(df.index, df["LAD23NM"])
-    ax.set_xlabel("Number of Bike Points")
-    return fig
-
-bike_bar = get_bike_points_bar(points_borough)
-points_borough["cumulative_points"] = points_borough["Bike Points"].cumsum()
-points_borough["cumulative_perc"] = points_borough["cumulative_points"] / points_borough["Bike Points"].sum()
-dep_london_map = dep_london_map.merge(points_borough.drop(columns=["LAD23NM"]), how="left", on=LA_CODE).fillna(0)
-london_choropleth(dep_london_map, "Bike Points", "Bike Points")
-bike_bar.savefig("output/bike_bar.png", bbox_inches='tight')
-
-# from requests.auth import HTTPBasicAuth
-# import requests
-#
-# url = 'https://api_url'
-# headers = {'Accept': 'application/json'}
-# auth = HTTPBasicAuth('apikey', '1234abcd')
-# files = {'file': open('filename', 'rb')}
-#
-# req = requests.get(url, headers=headers, auth=auth, files=files)
