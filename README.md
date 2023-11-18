@@ -25,7 +25,7 @@ To generate the static charts used in the presentation, run `python main.py`.
 To kickstart the streamlit app (the MVP) run `streamlit run bike_app.py`.
 
 ## Notes
-This was a very quick hack. Along with considering more metrics, here are some areas for improvement:
+This was a short exercise. Along with considering more metrics, here are some areas for improvement:
 
 * Better validation. Very basic validation checks have been added in, but more should be done, particularly when pulling from the API (check the response status and data types, for example)
 * Tests. No unit or integration tests have been added -- ideally, these would be for a finished product.
